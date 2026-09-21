@@ -1,0 +1,5 @@
+site_id,nom,orbite_type,altitude_km,inclination_deg,date_mise_en_service,statut
+SITE-001,ORBITALIS-Alpha,LEO-SSO,550.0,97.6,2024-03-15,actif
+SITE-002,ORBITALIS-Beta,LEO-SSO,550.0,97.6,2024-06-01,actif
+SITE-003,ORBITALIS-Gamma,LEO,,51.6,2025-01-10,actif
+SITE-004,ORBITALIS-Delta,LEO-SSO,600.0,,2025-03-01,actif

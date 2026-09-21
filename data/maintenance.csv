@@ -1,0 +1,98 @@
+maintenance_id,equipement_id,date_debut,date_fin,type_intervention,technicien,cout_eur,commentaire
+MAINT-001,EQ-020,2025-05-20,2025-05-23,inspection,Team-A,5621,Nettoyage radiateur
+MAINT-002,EQ-010,2025-06-04,2025-06-08,inspection,Team-C,994,Nettoyage radiateur
+MAINT-003,EQ-002,2025-05-05,2025-05-09,inspection,Team-C,2419,RAS
+MAINT-004,EQ-011,2025-05-03,2025-05-06,preventive,Team-B,5130,Remplacement module
+MAINT-005,EQ-019,2025-06-08,2025-06-09,preventive,Robot-2,1099,Nettoyage radiateur
+MAINT-006,EQ-036,2025-05-04,2025-05-07,inspection,Robot-2,2889,Nettoyage radiateur
+MAINT-007,EQ-040,2025-05-14,2025-05-20,preventive,Robot-2,1063,
+MAINT-008,EQ-005,2025-05-27,2025-05-30,preventive,Robot-2,5403,RAS
+MAINT-009,EQ-011,2025-05-22,2025-05-28,calibration,Team-A,4007,Mise à jour firmware
+MAINT-010,EQ-005,2025-05-20,2025-05-21,corrective,Robot-2,4669,
+MAINT-011,EQ-035,2025-05-18,2025-05-24,calibration,Robot-1,2696,RAS
+MAINT-012,EQ-051,2025-05-20,2025-05-21,inspection,Team-C,6042,Mise à jour firmware
+MAINT-013,EQ-008,2025-06-07,2025-06-13,remplacement,Team-B,1980,Nettoyage radiateur
+MAINT-014,EQ-009,2025-05-13,2025-05-14,inspection,Robot-1,6029,
+MAINT-015,EQ-049,2025-05-27,2025-05-31,remplacement,Robot-1,4288,Nettoyage radiateur
+MAINT-016,EQ-051,2025-06-06,2025-06-09,calibration,,6392,Mise à jour firmware
+MAINT-017,EQ-005,2025-05-01,2025-05-06,corrective,Robot-1,3860,Mise à jour firmware
+MAINT-018,EQ-059,2025-06-05,2025-06-09,inspection,,1602,RAS
+MAINT-019,EQ-036,2025-05-04,2025-05-05,remplacement,,1469,Mise à jour firmware
+MAINT-020,EQ-034,2025-05-21,2025-05-23,preventive,Team-C,2010,Nettoyage radiateur
+MAINT-021,EQ-002,2025-05-28,2025-06-01,calibration,,4097,Remplacement module
+MAINT-022,EQ-042,2025-05-18,2025-05-19,preventive,Robot-1,6425,Remplacement module
+MAINT-023,EQ-017,2025-05-20,2025-05-26,preventive,Team-A,2496,Remplacement module
+MAINT-024,EQ-052,2025-06-06,2025-06-11,preventive,Team-C,5228,
+MAINT-025,EQ-044,2025-06-04,2025-06-10,remplacement,Team-A,3225,Remplacement module
+MAINT-026,EQ-038,2025-06-07,2025-06-08,corrective,Robot-1,689,
+MAINT-027,EQ-051,2025-06-06,2025-06-11,remplacement,,4251,
+MAINT-028,EQ-037,2025-05-20,2025-05-25,calibration,Robot-2,502,RAS
+MAINT-029,EQ-024,2025-05-15,2025-05-20,remplacement,Robot-1,4276,
+MAINT-030,EQ-001,2025-06-05,2025-06-11,corrective,Robot-2,5925,Nettoyage radiateur
+MAINT-031,EQ-006,2025-05-07,2025-05-10,calibration,Team-C,342,Nettoyage radiateur
+MAINT-032,EQ-057,2025-05-16,2025-05-22,inspection,Team-B,1965,
+MAINT-033,EQ-039,2025-05-19,2025-05-24,remplacement,Robot-1,5094,
+MAINT-034,EQ-004,2025-05-18,2025-05-23,remplacement,Robot-2,1954,
+MAINT-035,EQ-028,2025-05-28,2025-05-31,calibration,Team-B,2044,
+MAINT-036,EQ-044,2025-05-10,2025-05-13,remplacement,Team-A,5817,RAS
+MAINT-037,EQ-006,2025-05-24,2025-05-30,inspection,Robot-2,607,RAS
+MAINT-038,EQ-043,2025-05-03,2025-05-06,inspection,Team-A,5284,
+MAINT-039,EQ-022,2025-05-17,2025-05-22,preventive,,5498,Nettoyage radiateur
+MAINT-040,EQ-017,2025-06-10,2025-06-14,remplacement,,5467,
+MAINT-041,EQ-060,2025-05-05,2025-05-11,inspection,Team-C,2752,Remplacement module
+MAINT-042,EQ-021,2025-06-04,2025-06-05,remplacement,Robot-1,4080,Remplacement module
+MAINT-043,EQ-033,2025-06-05,2025-06-07,calibration,Team-B,2581,
+MAINT-044,EQ-006,2025-05-18,2025-05-19,remplacement,Team-A,1859,Remplacement module
+MAINT-045,EQ-023,2025-05-22,2025-05-24,inspection,,3640,Nettoyage radiateur
+MAINT-046,EQ-040,2025-05-09,2025-05-15,calibration,Robot-1,3224,
+MAINT-047,EQ-043,2025-05-01,2025-05-03,corrective,Team-C,478,RAS
+MAINT-048,EQ-027,2025-05-09,2025-05-14,calibration,Team-A,1846,Mise à jour firmware
+MAINT-049,EQ-028,2025-06-08,2025-06-13,remplacement,Robot-1,2084,Nettoyage radiateur
+MAINT-050,EQ-026,2025-05-25,2025-05-29,inspection,Team-A,5196,Remplacement module
+MAINT-051,EQ-019,2025-05-17,2025-05-22,corrective,Robot-2,6344,RAS
+MAINT-052,EQ-053,2025-05-24,2025-05-26,preventive,Team-B,1715,
+MAINT-053,EQ-021,2025-05-02,2025-05-07,remplacement,Team-B,6373,
+MAINT-054,EQ-008,2025-05-15,2025-05-20,corrective,Team-A,2244,
+MAINT-055,EQ-044,2025-05-15,2025-05-20,corrective,Team-C,3115,Mise à jour firmware
+MAINT-056,EQ-057,2025-05-20,2025-05-21,remplacement,Team-A,5171,Nettoyage radiateur
+MAINT-057,EQ-053,2025-05-04,2025-05-06,calibration,,5097,Remplacement module
+MAINT-058,EQ-052,2025-05-29,2025-05-30,preventive,Team-C,3437,Nettoyage radiateur
+MAINT-059,EQ-005,2025-05-14,2025-05-19,remplacement,,5095,
+MAINT-060,EQ-033,2025-05-26,2025-05-28,remplacement,,5845,
+MAINT-061,EQ-059,2025-05-04,2025-05-08,preventive,Robot-1,388,Remplacement module
+MAINT-062,EQ-058,2025-05-21,2025-05-25,corrective,Robot-1,1964,Mise à jour firmware
+MAINT-063,EQ-011,2025-05-17,2025-05-20,inspection,Team-A,4773,RAS
+MAINT-064,EQ-036,2025-06-07,2025-06-10,remplacement,Team-B,3853,
+MAINT-065,EQ-021,2025-05-12,2025-05-17,preventive,Team-C,1703,RAS
+MAINT-066,EQ-051,2025-06-09,2025-06-11,remplacement,Robot-2,5581,Nettoyage radiateur
+MAINT-067,EQ-024,2025-05-14,2025-05-16,corrective,Robot-2,2105,RAS
+MAINT-068,EQ-006,2025-05-18,2025-05-21,calibration,Team-B,603,Nettoyage radiateur
+MAINT-069,EQ-055,2025-05-23,2025-05-25,remplacement,Team-A,4211,Remplacement module
+MAINT-070,EQ-034,2025-06-09,2025-06-13,corrective,Robot-2,5447,RAS
+MAINT-071,EQ-008,2025-05-05,2025-05-11,remplacement,Robot-2,2032,
+MAINT-072,EQ-028,2025-06-07,2025-06-10,remplacement,Robot-2,5047,
+MAINT-073,EQ-006,2025-05-12,2025-05-13,preventive,Team-B,268,
+MAINT-074,EQ-020,2025-05-22,2025-05-25,inspection,Team-A,4332,
+MAINT-075,EQ-022,2025-05-25,2025-05-26,inspection,Robot-1,384,
+MAINT-076,EQ-035,2025-05-04,2025-05-06,inspection,Robot-2,3865,
+MAINT-077,EQ-036,2025-05-01,2025-05-03,preventive,Team-B,488,RAS
+MAINT-078,EQ-007,2025-05-21,2025-05-24,corrective,Team-B,259,Mise à jour firmware
+MAINT-079,EQ-034,2025-05-31,2025-06-06,inspection,Team-A,1552,Nettoyage radiateur
+MAINT-080,EQ-049,2025-06-02,2025-06-07,remplacement,Team-C,406,Remplacement module
+MAINT-081,EQ-035,2025-06-05,2025-06-06,preventive,Robot-1,2594,Remplacement module
+MAINT-082,EQ-056,2025-06-04,2025-06-10,inspection,Team-A,5588,Mise à jour firmware
+MAINT-083,EQ-024,2025-06-10,2025-06-16,inspection,Team-A,6291,Mise à jour firmware
+MAINT-084,EQ-001,2025-05-31,2025-06-05,remplacement,Robot-2,455,Remplacement module
+MAINT-085,EQ-039,2025-05-09,2025-05-14,inspection,Robot-1,1404,Nettoyage radiateur
+MAINT-086,EQ-039,2025-05-13,2025-05-18,inspection,Team-A,5134,
+MAINT-087,EQ-025,2025-05-27,2025-05-31,inspection,Team-C,2991,Nettoyage radiateur
+MAINT-088,EQ-054,2025-05-04,2025-05-05,preventive,Team-A,6461,
+MAINT-089,EQ-025,2025-05-29,2025-06-01,remplacement,Team-B,4881,
+MAINT-090,EQ-056,2025-05-04,2025-05-08,inspection,,3172,
+MAINT-091,EQ-021,2025-05-09,2025-05-12,calibration,Team-B,5652,
+MAINT-092,EQ-055,2025-05-18,2025-05-24,calibration,Team-C,1392,
+MAINT-093,EQ-040,2025-06-10,2025-06-11,inspection,Team-A,5072,RAS
+MAINT-094,EQ-022,2025-05-10,2025-05-15,calibration,Team-B,3207,Mise à jour firmware
+MAINT-095,EQ-027,2025-06-04,2025-06-08,calibration,Team-B,3883,Remplacement module
+MAINT-999,EQ-XXX,15-05-2025,2025-05-22,preventive,Team-A,-250,
+MAINT-000,,2025-05-01,2025-04-28,???,,0,Données incohérentes
