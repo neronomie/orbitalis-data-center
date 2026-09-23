@@ -7,6 +7,8 @@ import pandas as pd
 BASE_DIR = Path(__file__).resolve().parent
 RAW_DIR = BASE_DIR / "data" / "raw"
 CLEAN_DIR = BASE_DIR / "data" / "cleaned"
+REJETS_DIR = BASE_DIR / "data" / "rejets"
+QUALITE_PATH = BASE_DIR / "data" / "qualite_indicateurs.csv"
 
 TYPES_EQUIPEMENT_VALIDES = {
     "panneau_solaire", "convertisseur_DC", "batterie", "onduleur", "radiateur",
@@ -33,6 +35,40 @@ def _log(report, anomalie, modifiees=0, supprimees=0):
     entry["lignes_supprimees"] += int(supprimees)
 
 
+def _new_rejets():
+    return []
+
+
+def _rejeter(rejets, df, masque, raison):
+    """Capture les lignes rejetées (état au moment du rejet) avec leur raison,
+    avant qu'elles ne soient filtrées du DataFrame -> alimente data/rejets/."""
+    if masque.any():
+        sous_df = df.loc[masque].copy()
+        sous_df.insert(0, "raison_rejet", raison)
+        rejets.append(sous_df)
+
+
+def _finaliser_rejets(rejets):
+    if not rejets:
+        return pd.DataFrame(columns=["raison_rejet"])
+    return pd.concat(rejets, ignore_index=True)
+
+
+def _indicateurs_qualite(source, n_lues, df_final, rejets_df):
+    """nombre de lignes lues / acceptées / rejetées / doublons détectés (par source)."""
+    n_rejetees = len(rejets_df)
+    n_doublons = (
+        int(rejets_df["raison_rejet"].str.startswith("doublons").sum()) if n_rejetees else 0
+    )
+    return {
+        "source": source,
+        "lignes_lues": n_lues,
+        "lignes_acceptees": len(df_final),
+        "lignes_rejetees": n_rejetees,
+        "doublons_detectes": n_doublons,
+    }
+
+
 DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y"]
 TIMESTAMP_FORMATS = [
     "%Y-%m-%dT%H:%M:%S",
@@ -45,7 +81,9 @@ TIMESTAMP_FORMATS = [
 
 def _parse_dates_multi(serie, formats):
     """Essaie chaque format strict dans l'ordre (pas de devinette dayfirst/monthfirst
-    qui pourrait corrompre des dates déjà valides) ; renvoie une Series datetime64 naïve."""
+    qui pourrait corrompre des dates déjà valides) ; renvoie une Series datetime64 naïve.
+    Toute valeur non convertie par aucun format devient NaT (cf. `illisible` dans
+    _dates_heterogenes, qui distingue ce cas d'une simple valeur manquante)."""
     resultat = pd.Series(pd.NaT, index=serie.index, dtype="datetime64[ns]")
     restant = serie.notna()
     for fmt in formats:
@@ -61,11 +99,40 @@ def _parse_dates_multi(serie, formats):
 
 
 def _dates_heterogenes(serie, formats=DATE_FORMATS, sortie="%Y-%m-%d"):
-    """Parse une colonne de dates à formats mixtes -> ISO, renvoie (iso, masque_modifie)."""
+    """Parse une colonne de dates/horodatages à formats mixtes -> ISO 8601 (UTC pour
+    les horodatages avec fuseau, cf. _parse_dates_multi). Renvoie (iso, modifie, illisible) :
+    - iso       : valeurs harmonisées (la valeur brute est conservée si aucun format
+                  ne matche, plutôt que silencieusement perdue)
+    - modifie   : lignes dont la représentation a changé (candidates à un comptage qualité)
+    - illisible : lignes non NaN au départ qu'aucun format n'a su parser (à rejeter
+                  explicitement par l'appelant, avec la raison du rejet)
+    """
     parsed = _parse_dates_multi(serie, formats)
     iso = parsed.dt.strftime(sortie)
+    illisible = serie.notna() & parsed.isna()
+    iso = iso.where(~illisible, serie)
     modifie = parsed.notna() & (iso != serie)
-    return iso, modifie
+    return iso, modifie, illisible
+
+
+def _harmoniser_horodatage(df, rejets, report, col="timestamp", cible="horodatage"):
+    """Étape commune à telemetrie/orbite/alarmes : ISO 8601 UTC ('...Z'), lignes
+    illisibles rejetées avec raison, renommage vers le nom de colonne harmonisé."""
+    iso, modifie, illisible = _dates_heterogenes(
+        df[col], formats=TIMESTAMP_FORMATS, sortie="%Y-%m-%dT%H:%M:%SZ"
+    )
+    if illisible.any():
+        _rejeter(rejets, df, illisible, "horodatage_illisible")
+        _log(report, "horodatage_illisible", supprimees=int(illisible.sum()))
+        df = df[~illisible]
+        iso = iso[~illisible]
+        modifie = modifie[~illisible]
+
+    df = df.copy()
+    df[col] = iso
+    if modifie.any():
+        _log(report, "formats_dates_heterogenes", modifiees=int(modifie.sum()))
+    return df.rename(columns={col: cible})
 
 
 # --------------------------------------------------------------------------- #
@@ -74,15 +141,23 @@ def _dates_heterogenes(serie, formats=DATE_FORMATS, sortie="%Y-%m-%d"):
 def nettoyer_sites(path=RAW_DIR / "sites.csv"):
     df = pd.read_csv(path)
     report = _new_report()
+    rejets = _new_rejets()
 
-    # Valeurs manquantes (altitude/inclinaison) -> imputation par la médiane des autres sites
+    # 1. doublons stricts (peu probable sur un référentiel de 4 sites, vérifié
+    # systématiquement comme sur toutes les autres sources)
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons")
+    _log(report, "doublons", supprimees=int(dup.sum()))
+    df = df[~dup]
+
+    # 2. Valeurs manquantes (altitude/inclinaison) -> imputation par la médiane des autres sites
     for col in ["altitude_km", "inclination_deg"]:
         n_manquant = int(df[col].isna().sum())
         if n_manquant:
             df[col] = df[col].fillna(df[col].median())
             _log(report, "valeurs_manquantes", modifiees=n_manquant)
 
-    return df.reset_index(drop=True), report
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 # --------------------------------------------------------------------------- #
@@ -91,27 +166,32 @@ def nettoyer_sites(path=RAW_DIR / "sites.csv"):
 def nettoyer_equipements(path=RAW_DIR / "equipements.csv", sites_valides=None):
     df = pd.read_csv(path)
     report = _new_report()
+    rejets = _new_rejets()
 
     if sites_valides is None:
         sites_valides = set(pd.read_csv(RAW_DIR / "sites.csv")["site_id"])
 
     # 1. Doublons stricts (ligne entièrement dupliquée)
-    n_avant = len(df)
-    df = df.drop_duplicates()
-    _log(report, "doublons", supprimees=n_avant - len(df))
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons")
+    _log(report, "doublons", supprimees=int(dup.sum()))
+    df = df[~dup]
 
     # 2. site_id manquant ou inconnu (clé étrangère invalide) -> ligne non rattachable, supprimée
     invalide = df["site_id"].isna() | ~df["site_id"].isin(sites_valides)
+    _rejeter(rejets, df, invalide, "cle_etrangere_invalide_site")
     _log(report, "cle_etrangere_invalide_site", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
     # 3. type hors nomenclature -> ligne non exploitable, supprimée
     invalide = ~df["type"].isin(TYPES_EQUIPEMENT_VALIDES)
+    _rejeter(rejets, df, invalide, "categorie_invalide_type")
     _log(report, "categorie_invalide_type", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
     # 4. statut hors nomenclature -> ligne non exploitable, supprimée
     invalide = ~df["statut"].isin(STATUTS_EQUIPEMENT_VALIDES)
+    _rejeter(rejets, df, invalide, "categorie_invalide_statut")
     _log(report, "categorie_invalide_statut", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
@@ -128,12 +208,18 @@ def nettoyer_equipements(path=RAW_DIR / "equipements.csv", sites_valides=None):
         _log(report, "valeurs_aberrantes_puissance", modifiees=int(aberrant.sum()))
 
     # 7. formats de date hétérogènes -> ISO (JJ/MM/AAAA vu dans le brut)
-    iso, modifie = _dates_heterogenes(df["date_installation"])
+    iso, modifie, illisible = _dates_heterogenes(df["date_installation"])
+    if illisible.any():
+        _rejeter(rejets, df, illisible, "date_illisible")
+        _log(report, "date_illisible", supprimees=int(illisible.sum()))
+        df = df[~illisible]
+        iso = iso[~illisible]
+        modifie = modifie[~illisible]
     df["date_installation"] = iso
     if modifie.any():
         _log(report, "formats_dates_heterogenes", modifiees=int(modifie.sum()))
 
-    return df.reset_index(drop=True), report
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 # --------------------------------------------------------------------------- #
@@ -142,24 +228,33 @@ def nettoyer_equipements(path=RAW_DIR / "equipements.csv", sites_valides=None):
 def nettoyer_maintenance(path=RAW_DIR / "maintenance.csv", equipements_valides=None):
     df = pd.read_csv(path)
     report = _new_report()
+    rejets = _new_rejets()
 
     if equipements_valides is None:
         equipements_valides = set(pd.read_csv(RAW_DIR / "equipements.csv")["equipement_id"])
 
     # 1. equipement_id manquant ou inconnu (clé étrangère invalide)
     invalide = df["equipement_id"].isna() | ~df["equipement_id"].isin(equipements_valides)
+    _rejeter(rejets, df, invalide, "cle_etrangere_invalide_equipement")
     _log(report, "cle_etrangere_invalide_equipement", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
     # 2. formats de date hétérogènes -> ISO
     for col in ["date_debut", "date_fin"]:
-        iso, modifie = _dates_heterogenes(df[col])
+        iso, modifie, illisible = _dates_heterogenes(df[col])
+        if illisible.any():
+            _rejeter(rejets, df, illisible, "date_illisible")
+            _log(report, "date_illisible", supprimees=int(illisible.sum()))
+            df = df[~illisible]
+            iso = iso[~illisible]
+            modifie = modifie[~illisible]
         df[col] = iso
         if modifie.any():
             _log(report, "formats_dates_heterogenes", modifiees=int(modifie.sum()))
 
     # 3. incohérence chronologique (date_fin avant date_debut)
     incoherent = pd.to_datetime(df["date_fin"]) < pd.to_datetime(df["date_debut"])
+    _rejeter(rejets, df, incoherent, "incoherence_chronologique")
     _log(report, "incoherence_chronologique", supprimees=int(incoherent.sum()))
     df = df[~incoherent]
 
@@ -171,6 +266,7 @@ def nettoyer_maintenance(path=RAW_DIR / "maintenance.csv", equipements_valides=N
 
     # 5. type_intervention hors nomenclature -> ligne non exploitable, supprimée
     invalide = ~df["type_intervention"].isin(TYPES_INTERVENTION_VALIDES)
+    _rejeter(rejets, df, invalide, "categorie_invalide_intervention")
     _log(report, "categorie_invalide_intervention", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
@@ -180,7 +276,7 @@ def nettoyer_maintenance(path=RAW_DIR / "maintenance.csv", equipements_valides=N
         df["technicien"] = df["technicien"].fillna("NON_RENSEIGNE")
         _log(report, "valeurs_manquantes", modifiees=n_manquant)
 
-    return df.reset_index(drop=True), report
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 # --------------------------------------------------------------------------- #
@@ -189,16 +285,33 @@ def nettoyer_maintenance(path=RAW_DIR / "maintenance.csv", equipements_valides=N
 def nettoyer_orbite(path=RAW_DIR / "orbite.csv", sites_valides=None):
     df = pd.read_csv(path)
     report = _new_report()
+    rejets = _new_rejets()
 
     if sites_valides is None:
         sites_valides = set(pd.read_csv(RAW_DIR / "sites.csv")["site_id"])
 
-    # 1. site_id inconnu (clé étrangère invalide)
+    # 1. harmonisation horodatage -> ISO 8601 UTC
+    df = _harmoniser_horodatage(df, rejets, report, col="timestamp", cible="timestamp")
+
+    # 2. site_id inconnu (clé étrangère invalide)
     invalide = ~df["site_id"].isin(sites_valides)
+    _rejeter(rejets, df, invalide, "cle_etrangere_invalide_site")
     _log(report, "cle_etrangere_invalide_site", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
-    # 2. phase orbitale inconnue -> déduite du rayonnement mesuré
+    # 3. doublons stricts
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons_stricts")
+    _log(report, "doublons_stricts", supprimees=int(dup.sum()))
+    df = df[~dup]
+
+    # 4. doublons de clé (une mesure orbitale par site et par horodatage)
+    dup = df.duplicated(subset=["site_id", "timestamp"], keep="first")
+    _rejeter(rejets, df, dup, "doublons_cle_site_horodatage")
+    _log(report, "doublons_cle_site_horodatage", supprimees=int(dup.sum()))
+    df = df[~dup]
+
+    # 5. phase orbitale inconnue -> déduite du rayonnement mesuré
     inconnue = df["phase"] == "inconnu"
     if inconnue.any():
         df.loc[inconnue, "phase"] = np.where(
@@ -206,14 +319,14 @@ def nettoyer_orbite(path=RAW_DIR / "orbite.csv", sites_valides=None):
         )
         _log(report, "phase_orbitale_inconnue", modifiees=int(inconnue.sum()))
 
-    # 3. rayonnement aberrant (hors [0, 1450] W/m2, constante solaire ~1361 W/m2)
+    # 6. rayonnement aberrant (hors [0, 1450] W/m2, constante solaire ~1361 W/m2)
     aberrant = (df["rayonnement_solaire_w_m2"] < 0) | (df["rayonnement_solaire_w_m2"] > 1450)
     if aberrant.any():
         medianes_valides = df.loc[~aberrant].groupby("phase")["rayonnement_solaire_w_m2"].median()
         df.loc[aberrant, "rayonnement_solaire_w_m2"] = df.loc[aberrant, "phase"].map(medianes_valides)
         _log(report, "valeurs_aberrantes_rayonnement", modifiees=int(aberrant.sum()))
 
-    # 4. température manquante -> interpolation temporelle par site
+    # 7. température manquante -> interpolation temporelle par site
     n_manquant = int(df["temperature_ambiante_c"].isna().sum())
     if n_manquant:
         df = df.sort_values(["site_id", "timestamp"])
@@ -222,7 +335,8 @@ def nettoyer_orbite(path=RAW_DIR / "orbite.csv", sites_valides=None):
         )
         _log(report, "valeurs_manquantes", modifiees=n_manquant)
 
-    return df.reset_index(drop=True), report
+    df = df.rename(columns={"timestamp": "horodatage"})
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 # --------------------------------------------------------------------------- #
@@ -230,86 +344,147 @@ def nettoyer_orbite(path=RAW_DIR / "orbite.csv", sites_valides=None):
 # --------------------------------------------------------------------------- #
 def nettoyer_alarmes(path=RAW_DIR / "alarmes.json", equipements_valides=None):
     df = pd.read_json(path)
+    df["timestamp"] = df["timestamp"].astype(str)  # pd.read_json type déjà en datetime -> normalisé en str pour un traitement uniforme des formats
     report = _new_report()
+    rejets = _new_rejets()
 
     if equipements_valides is None:
         equipements_valides = set(pd.read_csv(RAW_DIR / "equipements.csv")["equipement_id"])
 
-    # 1. equipement_id manquant ou inconnu (clé étrangère invalide)
+    # 1. harmonisation horodatage -> ISO 8601 UTC
+    df = _harmoniser_horodatage(df, rejets, report, col="timestamp", cible="timestamp")
+
+    # 2. equipement_id manquant ou inconnu (clé étrangère invalide)
     invalide = df["equipement_id"].isna() | ~df["equipement_id"].isin(equipements_valides)
+    _rejeter(rejets, df, invalide, "cle_etrangere_invalide_equipement")
     _log(report, "cle_etrangere_invalide_equipement", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
-    # 2. doublons stricts
-    n_avant = len(df)
-    df = df.drop_duplicates()
-    _log(report, "doublons", supprimees=n_avant - len(df))
+    # 3. doublons stricts
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons")
+    _log(report, "doublons", supprimees=int(dup.sum()))
+    df = df[~dup]
 
-    # 2bis. doublons de clé (même alarme_id, contenu différent -> conservation
+    # 3bis. doublons de clé (même alarme_id, contenu différent -> conservation
     # de la première occurrence, la ou les suivantes sont un doublon d'injection)
-    n_avant = len(df)
-    df = df.drop_duplicates(subset="alarme_id", keep="first")
-    _log(report, "doublons_cle_alarme_id", supprimees=n_avant - len(df))
+    dup = df.duplicated(subset="alarme_id", keep="first")
+    _rejeter(rejets, df, dup, "doublons_cle_alarme_id")
+    _log(report, "doublons_cle_alarme_id", supprimees=int(dup.sum()))
+    df = df[~dup]
 
-    # 3. sévérité hors nomenclature -> alignée sur le niveau le plus proche
+    # 4. sévérité hors nomenclature -> alignée sur le niveau le plus proche
     invalide = ~df["severite"].isin(SEVERITES_VALIDES)
     if invalide.any():
         df.loc[invalide, "severite"] = "critical"
         _log(report, "categorie_invalide_severite", modifiees=int(invalide.sum()))
 
-    # 4. type_alarme hors nomenclature
+    # 5. type_alarme hors nomenclature
     invalide = ~df["type_alarme"].isin(TYPES_ALARME_VALIDES)
     if invalide.any():
         df.loc[invalide, "type_alarme"] = "inconnu"
         _log(report, "categorie_invalide_type_alarme", modifiees=int(invalide.sum()))
 
-    return df.reset_index(drop=True), report
+    df = df.rename(columns={"timestamp": "horodatage"})
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 # --------------------------------------------------------------------------- #
 # telemetrie.csv
 # --------------------------------------------------------------------------- #
-def nettoyer_telemetrie(path=RAW_DIR / "telemetrie.csv", equipements_valides=None):
+def nettoyer_telemetrie(path=RAW_DIR / "telemetrie.csv", equipements_ctx=None, orbite_ctx=None):
+    """
+    equipements_ctx : DataFrame [equipement_id, site_id, type] (equipements.csv nettoyé)
+    orbite_ctx      : DataFrame [site_id, horodatage, phase] (orbite.csv nettoyé)
+    Les deux servent au point d'attention critique du brief : une puissance nulle
+    pendant l'éclipse d'un panneau solaire est un comportement normal, pas une
+    anomalie -> on ne peut trancher qu'en croisant avec le contexte orbital.
+    """
     df = pd.read_csv(path)
     report = _new_report()
+    rejets = _new_rejets()
 
-    if equipements_valides is None:
-        equipements_valides = set(pd.read_csv(RAW_DIR / "equipements.csv")["equipement_id"])
+    if equipements_ctx is None:
+        equipements_ctx = pd.read_csv(RAW_DIR / "equipements.csv")[["equipement_id", "site_id", "type"]]
+    equipements_valides = set(equipements_ctx["equipement_id"])
 
-    # 1. formats d'horodatage hétérogènes -> ISO 8601
-    iso, modifie = _dates_heterogenes(
-        df["timestamp"], formats=TIMESTAMP_FORMATS, sortie="%Y-%m-%dT%H:%M:%S"
-    )
-    df["timestamp"] = iso
-    if modifie.any():
-        _log(report, "formats_dates_heterogenes", modifiees=int(modifie.sum()))
+    # 1. harmonisation horodatage -> ISO 8601 UTC
+    df = _harmoniser_horodatage(df, rejets, report, col="timestamp", cible="timestamp")
 
     # 2. equipement_id inconnu (clé étrangère invalide)
     invalide = ~df["equipement_id"].isin(equipements_valides)
+    _rejeter(rejets, df, invalide, "cle_etrangere_invalide_equipement")
     _log(report, "cle_etrangere_invalide_equipement", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
     # 3. doublons stricts (ligne entièrement dupliquée)
-    n_avant = len(df)
-    df = df.drop_duplicates()
-    _log(report, "doublons_stricts", supprimees=n_avant - len(df))
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons_stricts")
+    _log(report, "doublons_stricts", supprimees=int(dup.sum()))
+    df = df[~dup]
 
     # 4. doublons de clé (même horodatage + équipement, valeurs de capteur différentes)
-    n_avant = len(df)
-    df = df.drop_duplicates(subset=["timestamp", "equipement_id"], keep="first")
-    _log(report, "doublons_cle_horodatage_equipement", supprimees=n_avant - len(df))
+    dup = df.duplicated(subset=["timestamp", "equipement_id"], keep="first")
+    _rejeter(rejets, df, dup, "doublons_cle_horodatage_equipement")
+    _log(report, "doublons_cle_horodatage_equipement", supprimees=int(dup.sum()))
+    df = df[~dup]
 
-    # 5. valeurs aberrantes (capteur défaillant : seuils physiquement impossibles)
-    #    puissance > 5000 W (max théorique ~3000 W par équipement) ou température hors [-150, 100] °C
-    aberrant_p = df["puissance_w"] > 5000
+    # 5. contexte équipement (type, site) nécessaire aux règles 6 et 7
+    type_par_equipement = equipements_ctx.set_index("equipement_id")["type"]
+    df["_type"] = df["equipement_id"].map(type_par_equipement)
+
+    # 6. valeurs aberrantes (capteur défaillant : seuils physiquement impossibles)
+    #    - puissance > 5000 W (max théorique ~3000 W par équipement)
+    #    - puissance < 0 W hors batterie (une batterie peut légitimement afficher une
+    #      puissance négative : convention de signe charge/décharge ; les autres
+    #      équipements ne peuvent physiquement pas produire une puissance négative)
+    #    - température hors [-150, 100] °C
+    aberrant_p_haute = df["puissance_w"] > 5000
+    aberrant_p_negative = (df["puissance_w"] < 0) & (df["_type"] != "batterie")
     aberrant_t = (df["temperature_c"] > 100) | (df["temperature_c"] < -150)
-    n_lignes_aberrantes = int((aberrant_p | aberrant_t).sum())
-    df.loc[aberrant_p, "puissance_w"] = np.nan
+    n_lignes_aberrantes = int((aberrant_p_haute | aberrant_p_negative | aberrant_t).sum())
+    df.loc[aberrant_p_haute | aberrant_p_negative, "puissance_w"] = np.nan
     df.loc[aberrant_t, "temperature_c"] = np.nan
     if n_lignes_aberrantes:
         _log(report, "valeurs_aberrantes_capteur", modifiees=n_lignes_aberrantes)
 
-    # 6. valeurs manquantes (capteur en panne ponctuelle) -> interpolation temporelle par équipement
+    # 7. POINT D'ATTENTION CRITIQUE : puissance nulle d'un panneau solaire.
+    #    Une puissance nulle n'est PAS une anomalie en soi : en éclipse, la
+    #    production solaire est normalement nulle. On ne neutralise donc une
+    #    puissance nulle que si le panneau n'est PAS en éclipse au moment de la
+    #    mesure (contexte résolu via orbite.csv, mesure la plus proche dans le
+    #    temps sur le même site). Les autres types d'équipement ne présentent
+    #    jamais de puissance nulle dans ce jeu de données ; par prudence on
+    #    applique la même règle (nulle hors éclipse = suspect) plutôt que de la
+    #    supposer toujours valide.
+    if orbite_ctx is not None and len(df):
+        site_par_equipement = equipements_ctx.set_index("equipement_id")["site_id"]
+        df["_site_id"] = df["equipement_id"].map(site_par_equipement)
+        df["_ts_dt"] = pd.to_datetime(df["timestamp"])
+
+        orb = orbite_ctx[["site_id", "horodatage", "phase"]].copy()
+        orb["horodatage"] = pd.to_datetime(orb["horodatage"])
+        orb = orb.sort_values("horodatage")
+
+        df = df.sort_values("_ts_dt")
+        df = pd.merge_asof(
+            df, orb,
+            left_on="_ts_dt", right_on="horodatage",
+            left_by="_site_id", right_by="site_id",
+            direction="nearest",
+        )
+
+        zero_suspect = (df["puissance_w"] == 0) & (df["phase"] != "eclipse")
+        if zero_suspect.any():
+            df.loc[zero_suspect, "puissance_w"] = np.nan
+            _log(report, "puissance_nulle_hors_eclipse", modifiees=int(zero_suspect.sum()))
+
+        df = df.drop(columns=["_site_id", "_ts_dt", "horodatage", "phase", "site_id"], errors="ignore")
+
+    df = df.drop(columns=["_type"], errors="ignore")
+
+    # 8. valeurs manquantes (capteur en panne ponctuelle, y compris les valeurs
+    #    neutralisées ci-dessus) -> interpolation temporelle par équipement
     cols_numeriques = ["puissance_w", "temperature_c", "tension_v", "courant_a"]
     n_lignes_manquantes = int(df[cols_numeriques].isna().any(axis=1).sum())
     if n_lignes_manquantes:
@@ -319,7 +494,8 @@ def nettoyer_telemetrie(path=RAW_DIR / "telemetrie.csv", equipements_valides=Non
         )
         _log(report, "valeurs_manquantes", modifiees=n_lignes_manquantes)
 
-    return df.reset_index(drop=True), report
+    df = df.rename(columns={"timestamp": "horodatage"})
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 # --------------------------------------------------------------------------- #
@@ -327,14 +503,17 @@ def nettoyer_telemetrie(path=RAW_DIR / "telemetrie.csv", equipements_valides=Non
 # --------------------------------------------------------------------------- #
 def nettoyer_modeles(df):
     report = _new_report()
+    rejets = _new_rejets()
 
     # 1. doublons stricts
-    n_avant = len(df)
-    df = df.drop_duplicates()
-    _log(report, "doublons", supprimees=n_avant - len(df))
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons")
+    _log(report, "doublons", supprimees=int(dup.sum()))
+    df = df[~dup]
 
     # 2. type_equipement hors nomenclature -> ligne non exploitable, supprimée
     invalide = ~df["type_equipement"].isin(TYPES_EQUIPEMENT_VALIDES)
+    _rejeter(rejets, df, invalide, "categorie_invalide_type")
     _log(report, "categorie_invalide_type", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
@@ -355,19 +534,22 @@ def nettoyer_modeles(df):
         df.loc[aberrant, "puissance_nominale_w"] = medianes.loc[aberrant]
         _log(report, "valeurs_aberrantes_puissance", modifiees=int(aberrant.sum()))
 
-    return df.reset_index(drop=True), report
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 def nettoyer_seuils_alarmes(df):
     report = _new_report()
+    rejets = _new_rejets()
 
     # 1. doublons stricts
-    n_avant = len(df)
-    df = df.drop_duplicates()
-    _log(report, "doublons", supprimees=n_avant - len(df))
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons")
+    _log(report, "doublons", supprimees=int(dup.sum()))
+    df = df[~dup]
 
     # 2. type_alarme hors nomenclature -> ligne non exploitable, supprimée
     invalide = ~df["type_alarme"].isin(TYPES_ALARME_VALIDES)
+    _rejeter(rejets, df, invalide, "categorie_invalide_type_alarme")
     _log(report, "categorie_invalide_type_alarme", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
@@ -376,25 +558,29 @@ def nettoyer_seuils_alarmes(df):
     #    numérique) ; pour tout autre type, ligne non exploitable, supprimée
     manquant = df[["seuil_warning", "seuil_critical", "unite"]].isna().any(axis=1)
     manquant_inattendu = manquant & (df["type_alarme"] != "capteur_defaillant")
+    _rejeter(rejets, df, manquant_inattendu, "valeurs_manquantes_seuils")
     _log(report, "valeurs_manquantes_seuils", supprimees=int(manquant_inattendu.sum()))
     df = df[~manquant_inattendu]
 
-    return df.reset_index(drop=True), report
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 def nettoyer_references_sites(df, sites_valides=None):
     report = _new_report()
+    rejets = _new_rejets()
 
     if sites_valides is None:
         sites_valides = set(pd.read_csv(RAW_DIR / "sites.csv")["site_id"])
 
     # 1. doublons stricts
-    n_avant = len(df)
-    df = df.drop_duplicates()
-    _log(report, "doublons", supprimees=n_avant - len(df))
+    dup = df.duplicated()
+    _rejeter(rejets, df, dup, "doublons")
+    _log(report, "doublons", supprimees=int(dup.sum()))
+    df = df[~dup]
 
     # 2. site_id inconnu (clé étrangère invalide) -> ligne non rattachable, supprimée
     invalide = ~df["site_id"].isin(sites_valides)
+    _rejeter(rejets, df, invalide, "cle_etrangere_invalide_site")
     _log(report, "cle_etrangere_invalide_site", supprimees=int(invalide.sum()))
     df = df[~invalide]
 
@@ -410,11 +596,11 @@ def nettoyer_references_sites(df, sites_valides=None):
         df.loc[aberrant, "capacite_max_kw"] = df["capacite_max_kw"].median()
         _log(report, "valeurs_aberrantes_capacite", modifiees=int(aberrant.sum()))
 
-    return df.reset_index(drop=True), report
+    return df.reset_index(drop=True), report, _finaliser_rejets(rejets)
 
 
 def nettoyer_catalogue(path=RAW_DIR / "catalogue.db", sites_valides=None):
-    """Nettoie les 3 tables de catalogue.db, renvoie {table: (df, report)}."""
+    """Nettoie les 3 tables de catalogue.db, renvoie {table: (df_brut, df_propre, report, rejets)}."""
     con = sqlite3.connect(path)
     try:
         modeles_brut = pd.read_sql("SELECT * FROM modeles", con)
@@ -423,14 +609,16 @@ def nettoyer_catalogue(path=RAW_DIR / "catalogue.db", sites_valides=None):
     finally:
         con.close()
 
-    modeles_df, modeles_report = nettoyer_modeles(modeles_brut)
-    seuils_df, seuils_report = nettoyer_seuils_alarmes(seuils_brut)
-    ref_sites_df, ref_sites_report = nettoyer_references_sites(ref_sites_brut, sites_valides=sites_valides)
+    modeles_df, modeles_report, modeles_rejets = nettoyer_modeles(modeles_brut)
+    seuils_df, seuils_report, seuils_rejets = nettoyer_seuils_alarmes(seuils_brut)
+    ref_sites_df, ref_sites_report, ref_sites_rejets = nettoyer_references_sites(
+        ref_sites_brut, sites_valides=sites_valides
+    )
 
     return {
-        "modeles": (modeles_brut, modeles_df, modeles_report),
-        "seuils_alarmes": (seuils_brut, seuils_df, seuils_report),
-        "references_sites": (ref_sites_brut, ref_sites_df, ref_sites_report),
+        "modeles": (modeles_brut, modeles_df, modeles_report, modeles_rejets),
+        "seuils_alarmes": (seuils_brut, seuils_df, seuils_report, seuils_rejets),
+        "references_sites": (ref_sites_brut, ref_sites_df, ref_sites_report, ref_sites_rejets),
     }
 
 
@@ -449,48 +637,83 @@ def _imprimer_rapport(nom_fichier, n_avant, n_apres, report):
         )
 
 
+def _imprimer_indicateurs(indicateurs):
+    print("\n" + "-" * 78)
+    print(" INDICATEURS DE QUALITÉ PAR SOURCE")
+    print("-" * 78)
+    entete = f"  {'source':<28} {'lues':>10} {'acceptées':>10} {'rejetées':>10} {'doublons':>10}"
+    print(entete)
+    for ind in indicateurs:
+        print(
+            f"  {ind['source']:<28} {ind['lignes_lues']:>10} {ind['lignes_acceptees']:>10} "
+            f"{ind['lignes_rejetees']:>10} {ind['doublons_detectes']:>10}"
+        )
+
+
 def main():
     CLEAN_DIR.mkdir(parents=True, exist_ok=True)
+    REJETS_DIR.mkdir(parents=True, exist_ok=True)
 
     print("=" * 78)
     print(" RAPPORT DE NETTOYAGE ETL - ORBITALIS")
     print("=" * 78)
 
-    sites_df, sites_report = nettoyer_sites()
-    _imprimer_rapport("sites.csv", n_avant=len(pd.read_csv(RAW_DIR / "sites.csv")),
-                       n_apres=len(sites_df), report=sites_report)
+    indicateurs = []
+    rejets_par_source = {}
 
-    eq_df, eq_report = nettoyer_equipements(sites_valides=set(sites_df["site_id"]))
-    _imprimer_rapport("equipements.csv", n_avant=len(pd.read_csv(RAW_DIR / "equipements.csv")),
-                       n_apres=len(eq_df), report=eq_report)
+    def _traiter(nom, n_avant, resultat):
+        df, report, rejets_df = resultat
+        _imprimer_rapport(nom, n_avant=n_avant, n_apres=len(df), report=report)
+        indicateurs.append(_indicateurs_qualite(nom, n_avant, df, rejets_df))
+        rejets_par_source[nom] = rejets_df
+        return df, report
 
+    sites_df, sites_report = _traiter(
+        "sites.csv", len(pd.read_csv(RAW_DIR / "sites.csv")), nettoyer_sites()
+    )
+
+    eq_df, eq_report = _traiter(
+        "equipements.csv", len(pd.read_csv(RAW_DIR / "equipements.csv")),
+        nettoyer_equipements(sites_valides=set(sites_df["site_id"])),
+    )
     equipements_valides = set(eq_df["equipement_id"])
 
-    maint_df, maint_report = nettoyer_maintenance(equipements_valides=equipements_valides)
-    _imprimer_rapport("maintenance.csv", n_avant=len(pd.read_csv(RAW_DIR / "maintenance.csv")),
-                       n_apres=len(maint_df), report=maint_report)
+    maint_df, maint_report = _traiter(
+        "maintenance.csv", len(pd.read_csv(RAW_DIR / "maintenance.csv")),
+        nettoyer_maintenance(equipements_valides=equipements_valides),
+    )
 
-    orbite_df, orbite_report = nettoyer_orbite(sites_valides=set(sites_df["site_id"]))
-    _imprimer_rapport("orbite.csv", n_avant=len(pd.read_csv(RAW_DIR / "orbite.csv")),
-                       n_apres=len(orbite_df), report=orbite_report)
+    orbite_df, orbite_report = _traiter(
+        "orbite.csv", len(pd.read_csv(RAW_DIR / "orbite.csv")),
+        nettoyer_orbite(sites_valides=set(sites_df["site_id"])),
+    )
 
-    alarmes_df, alarmes_report = nettoyer_alarmes(equipements_valides=equipements_valides)
-    _imprimer_rapport("alarmes.json", n_avant=len(pd.read_json(RAW_DIR / "alarmes.json")),
-                       n_apres=len(alarmes_df), report=alarmes_report)
+    alarmes_df, alarmes_report = _traiter(
+        "alarmes.json", len(pd.read_json(RAW_DIR / "alarmes.json")),
+        nettoyer_alarmes(equipements_valides=equipements_valides),
+    )
 
-    telem_df, telem_report = nettoyer_telemetrie(equipements_valides=equipements_valides)
-    _imprimer_rapport("telemetrie.csv", n_avant=len(pd.read_csv(RAW_DIR / "telemetrie.csv")),
-                       n_apres=len(telem_df), report=telem_report)
+    telem_df, telem_report = _traiter(
+        "telemetrie.csv", len(pd.read_csv(RAW_DIR / "telemetrie.csv")),
+        nettoyer_telemetrie(
+            equipements_ctx=eq_df[["equipement_id", "site_id", "type"]],
+            orbite_ctx=orbite_df[["site_id", "horodatage", "phase"]],
+        ),
+    )
 
     catalogue = nettoyer_catalogue(sites_valides=set(sites_df["site_id"]))
-    for table, (df_brut, df_propre, rep) in catalogue.items():
-        _imprimer_rapport(f"catalogue.db::{table}", n_avant=len(df_brut),
-                           n_apres=len(df_propre), report=rep)
+    catalogue_reports = {}
+    for table, (df_brut, df_propre, rep, rejets_df) in catalogue.items():
+        nom = f"catalogue.db::{table}"
+        _imprimer_rapport(nom, n_avant=len(df_brut), n_apres=len(df_propre), report=rep)
+        indicateurs.append(_indicateurs_qualite(nom, len(df_brut), df_propre, rejets_df))
+        rejets_par_source[nom] = rejets_df
+        catalogue_reports[table] = rep
 
     print("\n" + "-" * 78)
     total_modifiees = total_supprimees = 0
     tous_reports = [sites_report, eq_report, maint_report, orbite_report, alarmes_report, telem_report]
-    tous_reports += [rep for _, _, rep in catalogue.values()]
+    tous_reports += list(catalogue_reports.values())
     for report in tous_reports:
         for compte in report.values():
             total_modifiees += compte["lignes_modifiees"]
@@ -498,6 +721,9 @@ def main():
     print(f"TOTAL toutes sources : {total_modifiees} lignes modifiées, {total_supprimees} lignes supprimées")
     print("-" * 78)
 
+    _imprimer_indicateurs(indicateurs)
+
+    # Zone cleaned : données acceptées
     sites_df.to_csv(CLEAN_DIR / "sites.csv", index=False)
     eq_df.to_csv(CLEAN_DIR / "equipements.csv", index=False)
     maint_df.to_csv(CLEAN_DIR / "maintenance.csv", index=False)
@@ -508,6 +734,16 @@ def main():
     catalogue["seuils_alarmes"][1].to_csv(CLEAN_DIR / "catalogue_seuils_alarmes.csv", index=False)
     catalogue["references_sites"][1].to_csv(CLEAN_DIR / "catalogue_references_sites.csv", index=False)
     print(f"\nFichiers nettoyés écrits dans {CLEAN_DIR}")
+
+    # Rejets : une ligne rejetée = sa valeur d'origine + la raison du rejet
+    for nom, rejets_df in rejets_par_source.items():
+        nom_fichier = nom.replace("catalogue.db::", "catalogue_").replace(".csv", "").replace(".json", "")
+        rejets_df.to_csv(REJETS_DIR / f"{nom_fichier}.csv", index=False)
+    print(f"Lignes rejetées (avec raison) écrites dans {REJETS_DIR}")
+
+    # Indicateurs de qualité consolidés
+    pd.DataFrame(indicateurs).to_csv(QUALITE_PATH, index=False)
+    print(f"Indicateurs de qualité écrits dans {QUALITE_PATH}")
 
 
 if __name__ == "__main__":

@@ -79,7 +79,7 @@ def build_conceptual():
     con.execute(f"""
         INSERT INTO mesure_telemetrie (equipement_id, horodatage, puissance_w,
             temperature_c, rayonnement, tension_v, courant_a)
-        SELECT equipement_id, "timestamp", puissance_w, temperature_c,
+        SELECT equipement_id, horodatage, puissance_w, temperature_c,
                rayonnement, tension_v, courant_a
         FROM read_csv_auto('{_csv("telemetrie.csv")}')
     """)
@@ -87,13 +87,13 @@ def build_conceptual():
     con.execute(f"""
         INSERT INTO mesure_orbitale (site_id, horodatage, phase,
             rayonnement_solaire_w_m2, temperature_ambiante_c)
-        SELECT site_id, "timestamp", phase, rayonnement_solaire_w_m2, temperature_ambiante_c
+        SELECT site_id, horodatage, phase, rayonnement_solaire_w_m2, temperature_ambiante_c
         FROM read_csv_auto('{_csv("orbite.csv")}')
     """)
 
     con.execute(f"""
         INSERT INTO alarme
-        SELECT alarme_id, equipement_id, type_alarme, "timestamp", severite, message, acquittee
+        SELECT alarme_id, equipement_id, type_alarme, horodatage, severite, message, acquittee
         FROM read_csv_auto('{_csv("alarmes.csv")}')
     """)
 
