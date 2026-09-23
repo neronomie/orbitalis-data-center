@@ -1,8 +1,3 @@
-"""Charge les CSV de data/cleaned/ dans conceptual.db (schéma relationnel intégré,
-cf. create_conceptuel.sql) puis dérive analytics.db (schéma en étoile,
-cf. create_analytique.sql) à partir de conceptual.db.
-"""
-
 from pathlib import Path
 
 import duckdb
