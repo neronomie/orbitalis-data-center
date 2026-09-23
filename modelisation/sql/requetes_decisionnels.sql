@@ -137,19 +137,60 @@ GROUP BY de.type_equipement, fp.phase
 ORDER BY de.type_equipement, fp.phase;
 
 
--- 9. (Business)  Quel est le coût estimé des pertes de production non anticipées sur la période disponible ?
+-- 9. (Business) Coût estimé des pertes de production non anticipées
 WITH parametres AS (
-    SELECT 0.15 AS cout_par_kwh_eur 
+    SELECT 0.15 AS cout_par_kwh_eur  -- hypothèse : coût de compensation de l'énergie non produite
 ),
-pertes_non_anticipees AS (
-    SELECT fp.perte_production_w
+etat AS (
+    SELECT
+        fp.equipement_key,
+        fp.horodatage,
+        fp.perte_production_w,
+        (fp.perte_production_w > 0 AND NOT fp.en_maintenance) AS perte_non_anticipee,
+        (fp.performance < 0.65 AND fp.phase != 'eclipse' AND NOT fp.en_maintenance) AS est_down
     FROM fait_production fp
     WHERE fp.perte_production_w IS NOT NULL
-      AND fp.en_maintenance = false
+),
+avec_precedent AS (
+    SELECT
+        *,
+        COALESCE(
+            LAG(est_down) OVER (PARTITION BY equipement_key ORDER BY horodatage), false
+        ) AS etait_down_avant
+    FROM etat
+),
+episodes_marques AS (
+    -- somme cumulée d'un indicateur "début d'épisode" -> un identifiant stable
+    -- par épisode d'arrêt contigu (fonction de fenêtre)
+    SELECT
+        *,
+        SUM(CASE WHEN est_down AND NOT etait_down_avant THEN 1 ELSE 0 END)
+            OVER (PARTITION BY equipement_key ORDER BY horodatage) AS episode_id
+    FROM avec_precedent
+),
+episodes_down AS (
+    SELECT equipement_key, episode_id, COUNT(*) AS nb_mesures_episode  -- 1 mesure = 5 min
+    FROM episodes_marques
+    WHERE est_down
+    GROUP BY equipement_key, episode_id
+),
+resume_pertes AS (
+    SELECT SUM(perte_production_w) AS somme_perte_w
+    FROM etat
+    WHERE perte_non_anticipee
+),
+resume_down AS (
+    SELECT
+        COUNT(*) AS nb_episodes_down,
+        SUM(nb_mesures_episode) AS nb_mesures_down_total,
+        AVG(nb_mesures_episode) AS mesures_moyenne_par_episode
+    FROM episodes_down
 )
 SELECT
-    ROUND(SUM(perte_production_w) * 5.0 / 60 / 1000, 2) AS perte_totale_kwh,
+    ROUND(rp.somme_perte_w * 5.0 / 60 / 1000, 2) AS perte_totale_kwh,
     p.cout_par_kwh_eur,
-    ROUND(SUM(perte_production_w) * 5.0 / 60 / 1000 * p.cout_par_kwh_eur, 2) AS cout_estime_eur
-FROM pertes_non_anticipees, parametres p
-GROUP BY p.cout_par_kwh_eur;
+    ROUND(rp.somme_perte_w * 5.0 / 60 / 1000 * p.cout_par_kwh_eur, 2) AS cout_estime_eur,
+    rd.nb_episodes_down,
+    ROUND(rd.nb_mesures_down_total * 5.0 / 60, 1) AS nb_heures_down_total,
+    ROUND(rd.mesures_moyenne_par_episode * 5.0 / 60, 2) AS duree_moyenne_down_heures
+FROM resume_pertes rp, resume_down rd, parametres p;
