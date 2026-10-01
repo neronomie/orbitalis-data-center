@@ -1,27 +1,3 @@
-"""Phase 5 - Maintenance prédictive ORBITALIS.
-
-Lit la zone analytics (analytics.db) + les interventions de maintenance
-(conceptual.db), construit un jeu (équipement x heure), entraîne et compare
-3 modèles, choisit le seuil de décision au coût métier minimal sur la
-validation, l'applique UNE seule fois sur le test, puis publie :
-  - data/models/modele_risque.joblib + modele_risque.json (modèle, seuil, features)
-  - rapports/prediction/*.png (coût/seuil, matrices de confusion, importances)
-  - analytics.db/risque_equipement (score de risque courant par équipement)
-
-Variable cible (horizon H = 9 h, t = fin de l'heure d'observation) :
-  cible(équipement, t) = 1 si, sur ]t, t + 9 h] :
-    - performance_moyenne_hors_eclipse / reference(t) < 0,65
-        performance = puissance_reelle / puissance_attendue
-                      (|puissance| pour les batteries : puissance signée charge/décharge)
-        reference(t) = médiane des performances horaires hors éclipse sur [t - 24 h, t]
-                       (seuil relatif : les niveaux absolus diffèrent trop par type,
-                        batterie ~0,24 vs panneau ~1,86)
-    OU
-    - au moins une alarme critical de type_alarme lié à la puissance
-      (perte_puissance, sous_tension, surcharge) ou à la température (surchauffe).
-  Les heures sous maintenance sont exclues (observation et calcul de performance).
-"""
-
 import argparse
 import json
 import sys
@@ -56,8 +32,6 @@ TYPES_ALARME_CIBLE = ("perte_puissance", "sous_tension", "surcharge", "surchauff
 # Onduleurs et radiateurs : aucune télémétrie dans fait_production -> hors périmètre
 TYPES_EQUIPEMENT = ("panneau_solaire", "batterie", "convertisseur_DC")
 
-# Split chronologique (fractions de la période) ; une purge de HORIZON_H heures
-# en fin de train et de validation empêche leurs cibles de "voir" le jeu suivant.
 FRACTION_TRAIN = 0.70
 FRACTION_VALIDATION = 0.15
 
