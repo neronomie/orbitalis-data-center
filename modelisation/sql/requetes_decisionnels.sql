@@ -194,3 +194,6 @@ SELECT
     ROUND(rd.nb_mesures_down_total * 5.0 / 60, 1) AS nb_heures_down_total,
     ROUND(rd.mesures_moyenne_par_episode * 5.0 / 60, 2) AS duree_moyenne_down_heures
 FROM resume_pertes rp, resume_down rd, parametres p;
+
+-- Volet "Optimisation" (requête coûteuse, EXPLAIN, index, gain attendu) :
+-- voir modelisation/sql/optimisation_requetes.txt

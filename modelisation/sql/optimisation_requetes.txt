@@ -1,0 +1,42 @@
+OPTIMISATION - fait_production (622 080 lignes)
+=================================================
+
+1. Requête coûteuse (moyenne glissante sur toute la flotte) :
+
+    SELECT fp.equipement_key, fp.horodatage,
+        AVG(fp.performance) OVER (
+            PARTITION BY fp.equipement_key ORDER BY fp.horodatage
+            ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
+        )
+    FROM fait_production fp;
+
+2. Plan d'exécution :
+
+    EXPLAIN ANALYZE <requête ci-dessus>;
+
+   -> SEQ_SCAN (622 599 lignes) -> WINDOW -> PROJECTION
+   -> coût = tri interne par (equipement_key, horodatage) dans le nœud WINDOW
+   -> mesuré : ~0,075s
+
+3. Index proposé (déjà dans create_analytique.sql) :
+
+    CREATE INDEX idx_fait_production_en_maintenance
+        ON fait_production(equipement_key, horodatage);
+
+4. Gain attendu :
+
+   Sur un moteur ligne (PostgreSQL...), cet index évite le tri du WINDOW.
+   Sur DuckDB (colonne, OLAP), vérifié par EXPLAIN : l'index n'est PAS
+   utilisé ici, le plan reste un SEQ_SCAN avec ou sans lui.
+
+   Ce qui marche vraiment sur DuckDB : trier physiquement la table au
+   chargement plutôt que de compter sur un index. Testé :
+
+    CREATE TABLE fp2 AS SELECT * FROM fait_production
+        ORDER BY equipement_key, horodatage;
+
+   ~0,075s -> ~0,051s (-30%).
+
+   Appliqué dans etl_ingestion.py (_peupler_fait_production) : la requête
+   qui peuple fait_production se termine par
+   "ORDER BY de.equipement_key, t.horodatage".

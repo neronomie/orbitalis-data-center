@@ -4,7 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "duckdb>=1.5.5",
+    "matplotlib>=3.11.2",
     "numpy>=2.5.3",
     "pandas>=3.0.6",
     "pytz>=2026.3.post1",
+    "scikit-learn>=1.9.1",
 ]

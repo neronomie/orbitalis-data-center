@@ -180,6 +180,12 @@ def _peupler_fait_production(con):
     # Grain = 1 ligne de télémétrie. Contexte orbital résolu par ASOF JOIN
     # (dernière mesure d'orbite connue, même site, horodatage <= télémétrie) :
     # cadence orbite = 15 min vs télémétrie = 5 min, donc au plus 15 min d'écart.
+    #
+    # ORDER BY (equipement_key, horodatage) : trie physiquement les lignes au
+    # chargement sur les mêmes colonnes que PARTITION BY/ORDER BY des requêtes
+    # de fenêtrage (requetes_decisionnels.sql, Q7/Q9) -> ~30% plus rapide sur
+    # ces requêtes que l'ordre d'arrivée brut de la télémétrie (mesuré, voir
+    # modelisation/sql/optimisation_requetes.txt).
     con.execute("""
         INSERT INTO fait_production (
             date_key, horodatage, equipement_key, site_key,
@@ -200,6 +206,7 @@ def _peupler_fait_production(con):
         JOIN dim_equipement de ON de.equipement_id = t.equipement_id
         ASOF LEFT JOIN src.mesure_orbitale o
             ON o.site_id = eq.site_id AND t.horodatage >= o.horodatage
+        ORDER BY de.equipement_key, t.horodatage
     """)
 
     # Alarmes : rattachées par ASOF JOIN à la dernière ligne fait_production
