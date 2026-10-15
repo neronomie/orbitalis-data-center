@@ -3,11 +3,8 @@
 -- différencié de puissance_attendue_w / en_maintenance / lignes synthétiques
 -- d'arrêt sont de la logique ETL : voir etl_ingestion.py (populate_analytics).
 
-DROP TABLE IF EXISTS fait_maintenance CASCADE;
 DROP TABLE IF EXISTS fait_production CASCADE;
-DROP TABLE IF EXISTS dim_type_alarme CASCADE;
 DROP TABLE IF EXISTS dim_equipement CASCADE;
-DROP TABLE IF EXISTS dim_type_equipement CASCADE;
 DROP TABLE IF EXISTS dim_site CASCADE;
 DROP TABLE IF EXISTS dim_date CASCADE;
 
@@ -25,61 +22,27 @@ CREATE SEQUENCE seq_fait_production START 1;
 -- dim_date
 CREATE TABLE dim_date (
     date_key        INTEGER PRIMARY KEY,        -- format AAAAMMJJ
-    date_valeur     DATE NOT NULL UNIQUE,
-    annee           SMALLINT NOT NULL,
-    mois            SMALLINT NOT NULL CHECK (mois BETWEEN 1 AND 12),
-    jour            SMALLINT NOT NULL CHECK (jour BETWEEN 1 AND 31),
-    jour_semaine    SMALLINT NOT NULL CHECK (jour_semaine BETWEEN 1 AND 7), -- 1 = lundi
-    nom_jour        TEXT NOT NULL,
-    semaine_annee   SMALLINT NOT NULL,
-    trimestre       SMALLINT NOT NULL CHECK (trimestre BETWEEN 1 AND 4),
-    est_weekend     BOOLEAN NOT NULL
+    date_valeur     DATE NOT NULL UNIQUE
 );
 
--- dim_site : sites.csv + catalogue.db/references_sites
+-- dim_site : sites.csv (attributs descriptifs restés dans la zone conceptuelle)
 CREATE TABLE dim_site (
     site_key                BIGINT PRIMARY KEY DEFAULT nextval('seq_dim_site'),
     site_id                 TEXT NOT NULL UNIQUE,      -- clé métier, ex. SITE-001
-    nom                     TEXT NOT NULL,
-    orbite_type             TEXT,
-    altitude_km             NUMERIC(8,2),
-    inclination_deg         NUMERIC(6,2),
-    date_mise_en_service    DATE,
-    statut                  TEXT,
-    description             TEXT,
-    capacite_max_kw         NUMERIC(8,2),
-    zone_orbitale           TEXT
+    nom                     TEXT NOT NULL
 );
 
--- dim_type_equipement : catalogue.db/modeles agrégé par type_equipement
--- (contourne la FK equipement.modele -> modele_id invalide, cf. MODELISATION.md §3.2)
-CREATE TABLE dim_type_equipement (
-    type_equipement              TEXT PRIMARY KEY,        -- panneau_solaire, batterie, convertisseur_DC, onduleur, radiateur
-    rendement_nominal_moyen       NUMERIC(5,4),            -- AVG(rendement_nominal) sur les modèles du type
-    duree_vie_annees_moyenne       SMALLINT,
-    masse_kg_moyenne                NUMERIC(8,2),
-    nb_modeles_catalogue             SMALLINT NOT NULL
-);
-
--- dim_equipement : equipements.csv
+-- dim_equipement : equipements.csv + rendement moyen du type
+-- (catalogue.db/modeles agrégé par type_equipement ; contourne la FK
+-- equipement.modele -> modele_id invalide, cf. MODELISATION.md §3.2)
 CREATE TABLE dim_equipement (
     equipement_key          BIGINT PRIMARY KEY DEFAULT nextval('seq_dim_equipement'),
     equipement_id           TEXT NOT NULL UNIQUE,       -- clé métier, ex. EQ-001
     site_key                BIGINT NOT NULL REFERENCES dim_site (site_key),
-    type_equipement          TEXT NOT NULL REFERENCES dim_type_equipement (type_equipement),
-    modele_declare            TEXT,                       -- valeur brute equipements.csv/modele, indicative uniquement (non fiable, cf. §3.1/§3.2)
+    type_equipement          TEXT NOT NULL,              -- panneau_solaire, batterie, convertisseur_DC, onduleur, radiateur
     puissance_nominale_w       NUMERIC(10,2),
     date_installation            DATE,
-    statut                        TEXT
-);
-
--- dim_type_alarme : catalogue.db/seuils_alarmes
-CREATE TABLE dim_type_alarme (
-    type_alarme     TEXT PRIMARY KEY,          -- surchauffe, sous_tension, ...
-    seuil_warning   NUMERIC(10,3),
-    seuil_critical  NUMERIC(10,3),
-    unite           TEXT,
-    description     TEXT
+    rendement_nominal_moyen       NUMERIC(5,4)             -- AVG(rendement_nominal) sur les modèles du type, sert au calcul de puissance_attendue_w
 );
 
 -- =====================================================================
@@ -115,7 +78,6 @@ CREATE TABLE fait_production (
 
     -- Mesures capteur complémentaires (telemetrie.csv)
     temperature_c                    NUMERIC(6,2),
-    rayonnement                       NUMERIC(8,4),            -- capteur local de l'équipement, bruité (diagnostic uniquement, ≠ rayonnement_solaire_w_m2)
     tension_v                         NUMERIC(6,2),
     courant_a                          NUMERIC(8,3),
 
@@ -123,7 +85,7 @@ CREATE TABLE fait_production (
     nb_alarmes_info                     SMALLINT NOT NULL DEFAULT 0,
     nb_alarmes_warning                   SMALLINT NOT NULL DEFAULT 0,
     nb_alarmes_critical                   SMALLINT NOT NULL DEFAULT 0,
-    type_alarme                           TEXT REFERENCES dim_type_alarme (type_alarme), -- NULL si aucune alarme, sinon type de l'alarme la plus sévère du bucket
+    type_alarme                           TEXT,                     -- NULL si aucune alarme, sinon type de l'alarme la plus sévère du bucket
 
     -- Maintenance (operation_maintenance, zone conceptuelle) : indicateurs de contexte
     -- uniquement, pas d'attributs dégénérés. Voir populate_analytics() dans etl_ingestion.py

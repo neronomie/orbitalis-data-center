@@ -12,10 +12,14 @@ Prérequis : Python ≥ 3.13, [uv](https://docs.astral.sh/uv/), sources brutes d
 
 ```bash
 uv sync
-uv run python run_pipeline.py     # ETL : raw -> cleaned -> analytics
-uv run python run_prediction.py   # modèle + scores de risque
+uv run python run.py              # ETL puis modèle + scores de risque
 uv run streamlit run app.py       # application de pilotage
 ```
+
+Chaque étape peut aussi être lancée seule depuis la racine du projet :
+`uv run python -m scripts.run_pipeline` (ETL : raw -> cleaned -> analytics) et
+`uv run python -m scripts.run_prediction` (modèle + scores). La pipeline recrée
+`analytics.db` : relancer la prédiction ensuite, sinon l'application ne trouve plus ses scores.
 
 # Rapport briefs
 
@@ -25,7 +29,7 @@ Synthèse des sources, de leur grain, de leurs relations et des problèmes à tr
 
 ## 2. ETL et qualité
 
-- Nettoyage (raw → cleaned) dans [etl_nettoyage.py](etl_nettoyage.py) et ingestion (cleaned → analytics) dans [etl_ingestion.py](etl_ingestion.py), orchestrés par [run_pipeline.py](run_pipeline.py).
+- Nettoyage (raw → cleaned) dans [etl_nettoyage.py](etl_nettoyage.py) et ingestion (cleaned → analytics) dans [etl_ingestion.py](etl_ingestion.py), orchestrés par [scripts/run_pipeline.py](scripts/run_pipeline.py).
 - Les lignes rejetées sont conservées avec leur raison dans `data/rejets/`, et les indicateurs de qualité sont écrits dans `data/qualite_indicateurs.csv`.
 - Une puissance nulle en éclipse est considérée comme normale ; hors éclipse, elle est traitée comme suspecte.
 
@@ -42,7 +46,7 @@ Synthèse des sources, de leur grain, de leurs relations et des problèmes à tr
 
 ## 5. Maintenance prédictive
 
-- Code : [run_prediction.py](run_prediction.py). Figures (coût selon le seuil, matrices de confusion, importance des variables) : [rapports/prediction/](rapports/prediction/).
+- Code : [scripts/run_prediction.py](scripts/run_prediction.py). Figures (coût selon le seuil, matrices de confusion, importance des variables) : [rapports/prediction/](rapports/prediction/).
 - Cible : performance sur les 9 h suivantes inférieure à 0,65 × la performance de référence de l'équipement, ou alarme critique liée à la puissance ou à la température.
 - Méthode : découpage temporel train / validation / test. Trois modèles comparés : régression logistique, Random Forest et Gradient Boosting.
 - Seuil : celui qui minimise le coût métier sur la validation, appliqué une seule fois au test pour ne pas biaiser l'évaluation finale.

@@ -7,6 +7,9 @@ CLEAN_DIR = BASE_DIR / "data" / "cleaned"
 SQL_DIR = BASE_DIR / "modelisation" / "sql"
 CONCEPTUAL_DB = BASE_DIR / "data" / "analytics" /"conceptual.db"
 ANALYTICS_DB = BASE_DIR / "data" / "analytics" /"analytics.db"
+# Session DuckDB en UTC : sinon TIMESTAMPTZ -> TIMESTAMP est converti dans le
+# fuseau local de la machine (fait_production décalé, dépendant du poste).
+DUCKDB_CONFIG = {"TimeZone": "UTC"}
 
 
 def _csv(nom):
@@ -27,7 +30,7 @@ def _compte(con, table):
 def build_conceptual():
     if CONCEPTUAL_DB.exists():
         CONCEPTUAL_DB.unlink()
-    con = duckdb.connect(str(CONCEPTUAL_DB))
+    con = duckdb.connect(str(CONCEPTUAL_DB), config=DUCKDB_CONFIG)
     _executer_script(con, SQL_DIR / "create_conceptuel.sql")
 
     # site : sites.csv + catalogue_references_sites.csv (LEFT JOIN sur site_id,
@@ -122,57 +125,31 @@ def _peupler_dim_date(con):
         INSERT INTO dim_date
         SELECT
             CAST(strftime(d, '%Y%m%d') AS INTEGER),
-            CAST(d AS DATE),
-            CAST(EXTRACT(year FROM d) AS SMALLINT),
-            CAST(EXTRACT(month FROM d) AS SMALLINT),
-            CAST(EXTRACT(day FROM d) AS SMALLINT),
-            CAST(EXTRACT(isodow FROM d) AS SMALLINT),
-            CASE EXTRACT(isodow FROM d)
-                WHEN 1 THEN 'lundi' WHEN 2 THEN 'mardi' WHEN 3 THEN 'mercredi'
-                WHEN 4 THEN 'jeudi' WHEN 5 THEN 'vendredi' WHEN 6 THEN 'samedi'
-                ELSE 'dimanche'
-            END,
-            CAST(EXTRACT(week FROM d) AS SMALLINT),
-            CAST((EXTRACT(month FROM d) - 1) / 3 + 1 AS SMALLINT),
-            EXTRACT(isodow FROM d) IN (6, 7)
+            CAST(d AS DATE)
         FROM generate_series(CAST(? AS DATE), CAST(? AS DATE), INTERVAL 1 DAY) AS t(d)
     """, [date_min, date_max])
 
 
 def _peupler_dimensions(con):
     con.execute("""
-        INSERT INTO dim_site (site_id, nom, orbite_type, altitude_km, inclination_deg,
-            date_mise_en_service, statut, description, capacite_max_kw, zone_orbitale)
-        SELECT site_id, nom, orbite_type, altitude_km, inclination_deg,
-               date_mise_en_service, statut, description, capacite_max_kw, zone_orbitale
+        INSERT INTO dim_site (site_id, nom)
+        SELECT site_id, nom
         FROM src.site
     """)
 
     con.execute("""
-        INSERT INTO dim_type_equipement
-        SELECT
-            type_equipement,
-            ROUND(AVG(rendement_nominal), 4),
-            CAST(ROUND(AVG(duree_vie_annees)) AS SMALLINT),
-            ROUND(AVG(masse_kg), 2),
-            CAST(count(*) AS SMALLINT)
-        FROM src.modele_equipement
-        GROUP BY type_equipement
-    """)
-
-    con.execute("""
         INSERT INTO dim_equipement (equipement_id, site_key, type_equipement,
-            modele_declare, puissance_nominale_w, date_installation, statut)
-        SELECT e.equipement_id, ds.site_key, e.type, e.modele,
-               e.puissance_nominale_w, e.date_installation, e.statut
+            puissance_nominale_w, date_installation, rendement_nominal_moyen)
+        WITH type_agg AS (
+            SELECT type_equipement, ROUND(AVG(rendement_nominal), 4) AS rendement_nominal_moyen
+            FROM src.modele_equipement
+            GROUP BY type_equipement
+        )
+        SELECT e.equipement_id, ds.site_key, e.type,
+               e.puissance_nominale_w, e.date_installation, ta.rendement_nominal_moyen
         FROM src.equipement e
         JOIN dim_site ds ON ds.site_id = e.site_id
-    """)
-
-    con.execute("""
-        INSERT INTO dim_type_alarme
-        SELECT type_alarme, seuil_warning, seuil_critical, unite, description
-        FROM src.seuil_alarme
+        LEFT JOIN type_agg ta ON ta.type_equipement = e.type
     """)
 
 
@@ -190,7 +167,7 @@ def _peupler_fait_production(con):
         INSERT INTO fait_production (
             date_key, horodatage, equipement_key, site_key,
             phase, rayonnement_solaire_w_m2, temperature_ambiante_c,
-            puissance_w, temperature_c, rayonnement, tension_v, courant_a
+            puissance_w, temperature_c, tension_v, courant_a
         )
         SELECT
             CAST(strftime(t.horodatage, '%Y%m%d') AS INTEGER),
@@ -200,7 +177,7 @@ def _peupler_fait_production(con):
             COALESCE(o.phase, 'inconnu'),
             o.rayonnement_solaire_w_m2,
             o.temperature_ambiante_c,
-            t.puissance_w, t.temperature_c, t.rayonnement, t.tension_v, t.courant_a
+            t.puissance_w, t.temperature_c, t.tension_v, t.courant_a
         FROM src.mesure_telemetrie t
         JOIN src.equipement eq ON eq.equipement_id = t.equipement_id
         JOIN dim_equipement de ON de.equipement_id = t.equipement_id
@@ -253,16 +230,15 @@ def _peupler_fait_production(con):
         UPDATE fait_production fp
         SET puissance_attendue_w = CASE de.type_equipement
                 WHEN 'panneau_solaire' THEN
-                    de.puissance_nominale_w * dte.rendement_nominal_moyen
+                    de.puissance_nominale_w * de.rendement_nominal_moyen
                         * LEAST(fp.rayonnement_solaire_w_m2 / 1361.0, 1.0)
-                WHEN 'batterie' THEN de.puissance_nominale_w * dte.rendement_nominal_moyen
-                WHEN 'convertisseur_DC' THEN de.puissance_nominale_w * dte.rendement_nominal_moyen
-                WHEN 'onduleur' THEN de.puissance_nominale_w * dte.rendement_nominal_moyen
-                WHEN 'radiateur' THEN de.puissance_nominale_w * dte.rendement_nominal_moyen
+                WHEN 'batterie' THEN de.puissance_nominale_w * de.rendement_nominal_moyen
+                WHEN 'convertisseur_DC' THEN de.puissance_nominale_w * de.rendement_nominal_moyen
+                WHEN 'onduleur' THEN de.puissance_nominale_w * de.rendement_nominal_moyen
+                WHEN 'radiateur' THEN de.puissance_nominale_w * de.rendement_nominal_moyen
                 ELSE NULL
             END
         FROM dim_equipement de
-        JOIN dim_type_equipement dte ON dte.type_equipement = de.type_equipement
         WHERE fp.equipement_key = de.equipement_key
     """)
 
@@ -306,7 +282,7 @@ def _peupler_fait_production(con):
 def build_analytics():
     if ANALYTICS_DB.exists():
         ANALYTICS_DB.unlink()
-    con = duckdb.connect(str(ANALYTICS_DB))
+    con = duckdb.connect(str(ANALYTICS_DB), config=DUCKDB_CONFIG)
     _executer_script(con, SQL_DIR / "create_analytique.sql")
     con.execute(f"ATTACH '{str(CONCEPTUAL_DB)}' AS src (READ_ONLY)")
 
@@ -335,8 +311,7 @@ def main():
 
     print("\n--- analytics.db ---")
     con_a = build_analytics()
-    for table in ["dim_date", "dim_site", "dim_type_equipement", "dim_equipement",
-                  "dim_type_alarme", "fait_production"]:
+    for table in ["dim_date", "dim_site", "dim_equipement", "fait_production"]:
         print(f"  {table:<22} {_compte(con_a, table):>8} lignes")
     n_synthetiques = con_a.execute(
         "SELECT count(*) FROM fait_production WHERE ligne_synthetique_arret"

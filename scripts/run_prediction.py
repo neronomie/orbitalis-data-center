@@ -19,11 +19,12 @@ from sklearn.metrics import average_precision_score, confusion_matrix, roc_auc_s
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 ANALYTICS_DB = BASE_DIR / "data" / "analytics" / "analytics.db"
 CONCEPTUAL_DB = BASE_DIR / "data" / "analytics" / "conceptual.db"
 MODELS_DIR = BASE_DIR / "data" / "models"
 FIGURES_DIR = BASE_DIR / "rapports" / "prediction"
+DUCKDB_CONFIG = {"TimeZone": "UTC"}
 
 HORIZON_H = 9
 FENETRE_REFERENCE_H = 24
@@ -328,7 +329,7 @@ def publier_scores(df, modele, nom_modele, seuil):
     scores["modele"] = nom_modele
     scores["horizon_h"] = HORIZON_H
 
-    con = duckdb.connect(str(ANALYTICS_DB))
+    con = duckdb.connect(str(ANALYTICS_DB), config=DUCKDB_CONFIG)
     con.register("scores_df", scores)
     con.execute("CREATE OR REPLACE TABLE risque_equipement AS SELECT * FROM scores_df")
     con.close()
@@ -345,7 +346,7 @@ def _repartition(nom, d):
 
 def main():
     global ANALYTICS_DB, CONCEPTUAL_DB
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="Entraînement et scoring du modèle de maintenance prédictive")
     parser.add_argument("--analytics-db", type=Path, default=ANALYTICS_DB)
     parser.add_argument("--conceptual-db", type=Path, default=CONCEPTUAL_DB)
     args = parser.parse_args()
@@ -357,7 +358,7 @@ def main():
     print(" MAINTENANCE PRÉDICTIVE - ORBITALIS")
     print("=" * 78)
 
-    con = duckdb.connect(str(ANALYTICS_DB), read_only=True)
+    con = duckdb.connect(str(ANALYTICS_DB), read_only=True, config=DUCKDB_CONFIG)
     horaire = charger_horaire(con)
     maintenances = charger_maintenances(con)
     con.close()

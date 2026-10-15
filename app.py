@@ -8,9 +8,10 @@ import streamlit as st
 
 BASE_DIR = Path(__file__).resolve().parent
 ANALYTICS_DB = BASE_DIR / "data" / "analytics" / "analytics.db"
-CLEANED = BASE_DIR / "data" / "cleaned"
+CONCEPTUAL_DB = BASE_DIR / "data" / "analytics" / "conceptual.db"
 MODELE_JSON = BASE_DIR / "data" / "models" / "modele_risque.json"
 DECISIONS_CSV = BASE_DIR / "data" / "decisions.csv"
+DUCKDB_CONFIG = {"TimeZone": "UTC"}
 JOURS_RECENTS = 7
 
 st.set_page_config(page_title="Pilotage maintenance", layout="wide")
@@ -19,19 +20,35 @@ st.set_page_config(page_title="Pilotage maintenance", layout="wide")
 @st.cache_data
 def charger():
     meta = json.loads(MODELE_JSON.read_text())
-    con = duckdb.connect(str(ANALYTICS_DB), read_only=True)
+    con = duckdb.connect(str(ANALYTICS_DB), read_only=True, config=DUCKDB_CONFIG)
     scores = con.execute("SELECT equipement_id, score_risque FROM risque_equipement").df()
     production = con.execute("""
         SELECT e.equipement_id, f.horodatage, f.puissance_w, f.puissance_attendue_w, f.performance
         FROM fait_production f JOIN dim_equipement e USING (equipement_key)
     """).df()
     con.close()
-    equipements = pd.read_csv(CLEANED / "equipements.csv")
-    alarmes = pd.read_csv(CLEANED / "alarmes.csv", parse_dates=["horodatage"])
-    alarmes["horodatage"] = alarmes["horodatage"].dt.tz_localize(None)
-    maintenance = pd.read_csv(CLEANED / "maintenance.csv", parse_dates=["date_debut", "date_fin"])
-    orbite = pd.read_csv(CLEANED / "orbite.csv", parse_dates=["horodatage"])
-    orbite["horodatage"] = orbite["horodatage"].dt.tz_localize(None)
+
+    # Référentiel et historiques : zone conceptuelle (source de vérité).
+    # Session en UTC -> CAST(... AS TIMESTAMP) donne l'heure UTC, comme fait_production.
+    con = duckdb.connect(str(CONCEPTUAL_DB), read_only=True, config=DUCKDB_CONFIG)
+    equipements = con.execute("SELECT equipement_id, site_id, type FROM equipement").df()
+    alarmes = con.execute("""
+        SELECT alarme_id, equipement_id, CAST(horodatage AS TIMESTAMP) AS horodatage,
+               type_alarme, severite, message, acquittee
+        FROM alarme
+    """).df()
+    maintenance = con.execute("""
+        SELECT maintenance_id, equipement_id,
+               CAST(date_debut AS TIMESTAMP) AS date_debut, CAST(date_fin AS TIMESTAMP) AS date_fin,
+               type_intervention, technicien, cout_eur, commentaire
+        FROM operation_maintenance
+    """).df()
+    orbite = con.execute("""
+        SELECT CAST(horodatage AS TIMESTAMP) AS horodatage, site_id, phase,
+               rayonnement_solaire_w_m2, temperature_ambiante_c
+        FROM mesure_orbitale
+    """).df()
+    con.close()
     return meta, scores, production, equipements, alarmes, maintenance, orbite
 
 
